@@ -31,6 +31,7 @@ mod keyword {
 	syn::custom_keyword!(RuntimeEvent);
 	syn::custom_keyword!(Event);
 	syn::custom_keyword!(constant);
+	syn::custom_keyword!(const_get);
 	syn::custom_keyword!(frame_system);
 	syn::custom_keyword!(disable_frame_system_supertrait_check);
 }
@@ -43,6 +44,8 @@ pub struct ConfigDef {
 	pub has_instance: bool,
 	/// Const associated type.
 	pub consts_metadata: Vec<ConstMetadataDef>,
+	/// Const_get associated type.
+	pub consts_get: Vec<ConstGetDef>,
 	/// Whether the trait has the associated type `Event`, note that those bounds are
 	/// checked:
 	/// * `IsType<Self as frame_system::Config>::RuntimeEvent`
@@ -70,6 +73,59 @@ impl TryFrom<&syn::TraitItemType> for ConstMetadataDef {
 	fn try_from(trait_ty: &syn::TraitItemType) -> Result<Self, Self::Error> {
 		let err = |span, msg| {
 			syn::Error::new(span, format!("Invalid usage of `#[pallet::constant]`: {}", msg))
+		};
+		let doc = get_doc_literals(&trait_ty.attrs);
+		let ident = trait_ty.ident.clone();
+		let bound = trait_ty
+			.bounds
+			.iter()
+			.find_map(|b| {
+				if let syn::TypeParamBound::Trait(tb) = b {
+					tb.path
+						.segments
+						.last()
+						.and_then(|s| if s.ident == "Get" { Some(s) } else { None })
+				} else {
+					None
+				}
+			})
+			.ok_or_else(|| err(trait_ty.span(), "`Get<T>` trait bound not found"))?;
+		let type_arg = if let syn::PathArguments::AngleBracketed(ref ab) = bound.arguments {
+			if ab.args.len() == 1 {
+				if let syn::GenericArgument::Type(ref ty) = ab.args[0] {
+					Ok(ty)
+				} else {
+					Err(err(ab.args[0].span(), "Expected a type argument"))
+				}
+			} else {
+				Err(err(bound.span(), "Expected a single type argument"))
+			}
+		} else {
+			Err(err(bound.span(), "Expected trait generic args"))
+		}?;
+		let type_ = syn::parse2::<syn::Type>(replace_self_by_t(type_arg.to_token_stream()))
+			.expect("Internal error: replacing `Self` by `T` should result in valid type");
+
+		Ok(Self { ident, type_, doc })
+	}
+}
+
+/// Input definition for a const_get in pallet config.
+pub struct ConstGetDef {
+	/// Name of the associated type.
+	pub ident: syn::Ident,
+	/// The type of const, e.g. `u32` in `const Foo: u32;`, but `Self` is replaced by `T`
+	pub type_: syn::Type,
+	/// The doc associated
+	pub doc: Vec<syn::Lit>,
+}
+
+impl TryFrom<&syn::TraitItemType> for ConstGetDef {
+	type Error = syn::Error;
+
+	fn try_from(trait_ty: &syn::TraitItemType) -> Result<Self, Self::Error> {
+		let err = |span, msg| {
+			syn::Error::new(span, format!("Invalid usage of `#[pallet::const_get]`: {}", msg))
 		};
 		let doc = get_doc_literals(&trait_ty.attrs);
 		let ident = trait_ty.ident.clone();
@@ -141,6 +197,27 @@ impl syn::parse::Parse for TypeAttrConst {
 		content.parse::<syn::Token![::]>()?;
 
 		Ok(TypeAttrConst(content.parse::<keyword::constant>()?.span()))
+	}
+}
+
+/// Parse for `#[pallet::const_get]`
+pub struct TypeAttrConstGet(proc_macro2::Span);
+
+impl Spanned for TypeAttrConstGet {
+	fn span(&self) -> proc_macro2::Span {
+		self.0
+	}
+}
+
+impl syn::parse::Parse for TypeAttrConstGet {
+	fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+		input.parse::<syn::Token![#]>()?;
+		let content;
+		syn::bracketed!(content in input);
+		content.parse::<syn::Ident>()?;
+		content.parse::<syn::Token![::]>()?;
+
+		Ok(TypeAttrConstGet(content.parse::<keyword::const_get>()?.span()))
 	}
 }
 
@@ -332,6 +409,7 @@ impl ConfigDef {
 
 		let mut has_event_type = false;
 		let mut consts_metadata = vec![];
+		let mut consts_get = vec![];
 		for trait_item in &mut item.items {
 			// Parse for event
 			has_event_type =
@@ -354,6 +432,29 @@ impl ConfigDef {
 					_ => {
 						let msg =
 							"Invalid pallet::constant in pallet::config, expected type trait \
+							item";
+						return Err(syn::Error::new(trait_item.span(), msg))
+					},
+				}
+			}
+
+			// Parse for const_get
+			let type_attrs_const_get: Vec<TypeAttrConstGet> = helper::take_item_pallet_attrs(trait_item)?;
+
+			if type_attrs_const_get.len() > 1 {
+				let msg = "Invalid attribute in pallet::config, only one attribute is expected";
+				return Err(syn::Error::new(type_attrs_const_get[1].span(), msg))
+			}
+
+			if type_attrs_const_get.len() == 1 {
+				match trait_item {
+					syn::TraitItem::Type(ref type_) => {
+						let constant = ConstGetDef::try_from(type_)?;
+						consts_get.push(constant);
+					},
+					_ => {
+						let msg =
+							"Invalid pallet::const_get in pallet::config, expected type trait \
 							item";
 						return Err(syn::Error::new(trait_item.span(), msg))
 					},
@@ -395,6 +496,6 @@ impl ConfigDef {
 			return Err(syn::Error::new(item.span(), msg))
 		}
 
-		Ok(Self { index, has_instance, consts_metadata, has_event_type, where_clause, attr_span })
+		Ok(Self { index, has_instance, consts_metadata, consts_get, has_event_type, where_clause, attr_span })
 	}
 }
