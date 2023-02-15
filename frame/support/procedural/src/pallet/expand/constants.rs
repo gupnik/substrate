@@ -60,6 +60,23 @@ pub fn expand_constants(def: &mut Def) -> proc_macro2::TokenStream {
 		}
 	});
 
+	let config_consts_get = def.config.consts_get.iter().map(|const_| {
+		let ident = &const_.ident;
+		let const_type = &const_.type_;
+
+		ConstDef {
+			ident: const_.ident.clone(),
+			type_: const_.type_.clone(),
+			doc: const_.doc.clone(),
+			default_byte_impl: quote::quote!(
+				let value = <<T as Config #trait_use_gen>::#ident as
+					#frame_support::traits::Get<#const_type>>::get();
+				#frame_support::codec::Encode::encode(&value)
+			),
+			metadata_name: None,
+		}
+	});
+
 	let extra_consts = def.extra_constants.iter().flat_map(|d| &d.extra_constants).map(|const_| {
 		let ident = &const_.ident;
 
@@ -75,7 +92,7 @@ pub fn expand_constants(def: &mut Def) -> proc_macro2::TokenStream {
 		}
 	});
 
-	let consts = config_consts.chain(extra_consts).map(|const_| {
+	let consts = config_consts.chain(config_consts_get).chain(extra_consts).map(|const_| {
 		let const_type = &const_.type_;
 		let ident_str = format!("{}", const_.metadata_name.unwrap_or(const_.ident));
 

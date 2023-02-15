@@ -777,6 +777,21 @@ pub fn constant(_: TokenStream, _: TokenStream) -> TokenStream {
 	pallet_macro_stub()
 }
 
+/// The `#[pallet::const_get]` attribute can be used to declare an associated type trait bounded by `ConstGet`
+/// from [`pallet::config`](`macro@config`), e.g.:
+///
+/// ```ignore
+/// #[pallet::config]
+/// pub trait Config: frame_system::Config {
+/// 	#[pallet::const_get]
+/// 	type Foo: Get<u32>;
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn const_get(_: TokenStream, _: TokenStream) -> TokenStream {
+	pallet_macro_stub()
+}
+
 /// To bypass the `frame_system::Config` supertrait check, use the attribute
 /// `pallet::disable_frame_system_supertrait_check`, e.g.:
 ///
